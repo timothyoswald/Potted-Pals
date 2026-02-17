@@ -97,11 +97,9 @@ def load_pet_sprites(
                     new_size = (int(w * scale), int(h * scale))
                     img = img.resize(new_size, Image.Resampling.LANCZOS)
                 img = _cap_to_max_size(img, max_display_size)
-                # On macOS, keep RGBA for transparency; on Windows, composite onto color key
-                if sys.platform == "darwin":
-                    frames.append(img)  # Keep RGBA for macOS transparent window
-                else:
-                    frames.append(_composite_onto_bg(img, background_rgb))
+                # Composite RGBA onto color key background for consistent behavior on all platforms
+                # This ensures transparency works via color-key transparency
+                frames.append(_composite_onto_bg(img, background_rgb))
             if frames:
                 result[internal_key] = frames
         if "idle" not in result or "walk" not in result:
