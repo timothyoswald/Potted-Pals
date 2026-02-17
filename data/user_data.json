@@ -1,10 +1,15 @@
 {
-  "currency_balance": 0,
+  "currency_balance": 996000,
   "active_plant_id": "plant_shrub",
   "plant_stages": {
-    "plant_shrub": 0
+    "plant_shrub": 5
   },
   "pet_custom_names": {},
-  "inventory": [],
+  "inventory": [
+    "pet_person",
+    "pet_mushroom",
+    "pet_cat",
+    "pet_slime"
+  ],
   "last_login": "2026-02-17"
 }

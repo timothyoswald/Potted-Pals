@@ -63,6 +63,10 @@ class MainWindow:
         # Plant image reference (keep ref to prevent garbage collection)
         self.plant_image: Optional[ctk.CTkImage] = None
         self._plant_pil_image: Optional[object] = None
+        # macOS: render plant + pets on a Tk canvas so PNG alpha works
+        self._scene_canvas: Optional[tk.Canvas] = None
+        self._plant_canvas_img_id: Optional[int] = None
+        self._plant_photo_ref: Optional[ImageTk.PhotoImage] = None
 
         # Pets: list of {sprites, sprites_left, window, label, photo_ref, x, y, state, frame_idx, direction, vx, vy, cell_w, cell_h, state_after_id}
         self._pets: List[Dict[str, Any]] = []
@@ -192,14 +196,24 @@ class MainWindow:
             fg_color="transparent"
         )
         self.plant_frame.pack(fill="both", expand=True, padx=12, pady=6)
-        
-        # Plant image label
-        self.plant_label = ctk.CTkLabel(
-            self.plant_frame,
-            text="",
-            fg_color="transparent"
-        )
-        self.plant_label.pack(expand=True)
+
+        if sys.platform == "darwin":
+            # macOS: use a Tk canvas for reliable RGBA transparency
+            self._scene_canvas = tk.Canvas(
+                self.plant_frame,
+                bg=COLORS["cream"],
+                highlightthickness=0,
+                bd=0,
+            )
+            self._scene_canvas.pack(fill="both", expand=True)
+        else:
+            # Plant image label (Windows/Linux)
+            self.plant_label = ctk.CTkLabel(
+                self.plant_frame,
+                text="",
+                fg_color="transparent"
+            )
+            self.plant_label.pack(expand=True)
 
         # Global bindings for pet drag (so motion/release work when mouse leaves pet window)
         # Bind on the underlying tk widget for CustomTkinter compatibility
@@ -222,7 +236,7 @@ class MainWindow:
         self._pets_initialized = True
 
     def _add_pet(self, pet_id: str, root_tk: tk.Tk) -> None:
-        """Create one pet window and add to _pets. Caller ensures pet_id is in list_pets()."""
+        """Create one pet and add to _pets. Caller ensures pet_id is in list_pets()."""
         kwargs = {"pet_id": pet_id, "scale": PET_SCALE, "background_rgb": None}
         if pet_id in ("person", "cat"):
             kwargs["max_display_size"] = PET_MAX_DISPLAY_LARGE
@@ -235,6 +249,42 @@ class MainWindow:
         if not first_frames:
             return
         cell_w, cell_h = first_frames[0].size
+
+        # macOS: draw pets on the scene canvas (alpha transparency works here)
+        if sys.platform == "darwin":
+            if self._scene_canvas is None:
+                return
+            pet = {
+                "pet_id": pet_id,
+                "sprites": sprites,
+                "sprites_left": sprites_left,
+                "canvas_image_id": None,
+                "photo_ref": None,
+                "x": None,
+                "y": None,
+                "spawned": False,
+                "state": "idle",
+                "frame_idx": 0,
+                "direction": 1,
+                "vx": 0.0,
+                "vy": 0.0,
+                "cell_w": cell_w,
+                "cell_h": cell_h,
+                "state_after_id": None,
+                "tooltip_after_id": None,
+                "tooltip": None,
+            }
+            self._pets.append(pet)
+            self._pet_show_frame_one(pet)
+            # Bind hover/drag to the canvas item once it exists
+            if pet.get("canvas_image_id") is not None:
+                item_id = pet["canvas_image_id"]
+                self._scene_canvas.tag_bind(item_id, "<Enter>", lambda e, p=pet: self._pet_tooltip_schedule_show(p))
+                self._scene_canvas.tag_bind(item_id, "<Leave>", lambda e, p=pet: self._pet_tooltip_hide(p))
+                self._scene_canvas.tag_bind(item_id, "<ButtonPress-1>", lambda e, p=pet: (self._on_pet_drag_start(e, p), "break")[1])
+            self._pet_schedule_state_change_one(pet)
+            return
+
         win = tk.Toplevel(root_tk)
         win.overrideredirect(True)
         is_macos = sys.platform == "darwin"
@@ -375,7 +425,14 @@ class MainWindow:
         if not pet.get("spawned") or pet.get("x") is None or pet.get("y") is None:
             return
         name = get_pet_display_name_for_user(pet["pet_id"], self.user_data)
-        tip = tk.Toplevel(pet["window"].winfo_toplevel())
+        # macOS canvas pets don't have their own Toplevel window
+        parent = self.root.winfo_toplevel()
+        if "window" in pet:
+            try:
+                parent = pet["window"].winfo_toplevel()
+            except Exception:
+                parent = self.root.winfo_toplevel()
+        tip = tk.Toplevel(parent)
         tip.overrideredirect(True)
         tip.wm_attributes("-topmost", True)
         tip.configure(bg=COLORS["dark_text"], bd=0)
@@ -510,8 +567,20 @@ class MainWindow:
         return (min_x, max_x, min_y, max_y)
 
     def _pet_place_one(self, pet: Dict[str, Any]) -> None:
-        """Position one pet's Toplevel over the plant area. No-op if not yet spawned."""
+        """Position one pet. On macOS pets are canvas items; otherwise Toplevel windows."""
         if not pet.get("spawned"):
+            return
+        # macOS: canvas-rendered pets
+        if sys.platform == "darwin" and self._scene_canvas is not None and "canvas_image_id" in pet:
+            item_id = pet.get("canvas_image_id")
+            if item_id is None or pet.get("x") is None or pet.get("y") is None:
+                return
+            x = float(pet["x"]) + pet["cell_w"] / 2.0
+            y = float(pet["y"]) + pet["cell_h"] / 2.0
+            try:
+                self._scene_canvas.coords(item_id, x, y)
+            except tk.TclError:
+                return
             return
         try:
             root_x = self.plant_frame.winfo_rootx()
@@ -555,56 +624,48 @@ class MainWindow:
             return
         idx = pet["frame_idx"] % len(frames)
         pil_img = frames[idx]
-        # Handle transparency differently on macOS vs Windows
-        if pet.get("is_macos", False):
-            # macOS: Use RGBA images directly with Canvas and transparent window
-            # Ensure image is RGBA mode
+        # macOS: canvas-rendered pets keep RGBA so alpha transparency works
+        if sys.platform == "darwin" and self._scene_canvas is not None and "canvas_image_id" in pet:
             if pil_img.mode != "RGBA":
                 pil_img = pil_img.convert("RGBA")
-            # Try to preserve RGBA transparency by saving to BytesIO and reloading
-            # This sometimes helps with macOS transparency issues
-            try:
-                from io import BytesIO
-                buffer = BytesIO()
-                pil_img.save(buffer, format="PNG")
-                buffer.seek(0)
-                # Reload from buffer to ensure RGBA is preserved
-                from PIL import Image as PILImage
-                pil_img = PILImage.open(buffer).convert("RGBA")
-            except Exception:
-                pass  # If this fails, continue with original image
-            # Create PhotoImage from RGBA - should preserve transparency on macOS
             pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
-            # Update canvas image
-            canvas = pet.get("canvas")
-            if canvas:
-                # Delete old image if it exists
-                if pet.get("canvas_image_id") is not None:
-                    try:
-                        canvas.delete(pet["canvas_image_id"])
-                    except:
-                        pass
-                # Create image at center of canvas
-                img_id = canvas.create_image(
-                    pet["cell_w"] // 2,
-                    pet["cell_h"] // 2,
-                    image=pet["photo_ref"],
-                    anchor="center"
-                )
-                pet["canvas_image_id"] = img_id
-        else:
-            # Windows: use color-key transparency with composited images
-            if pil_img.mode == "RGBA":
-                from PIL import Image as PILImage
-                # Composite onto transparent color key background (magenta)
-                rgb_img = PILImage.new("RGB", pil_img.size, PET_TRANSPARENT_KEY_RGB)
-                rgb_img.paste(pil_img, mask=pil_img.split()[3])
-                pil_img = rgb_img
+            if pet.get("canvas_image_id") is None:
+                try:
+                    pet["canvas_image_id"] = self._scene_canvas.create_image(
+                        pet["cell_w"] // 2,
+                        pet["cell_h"] // 2,
+                        image=pet["photo_ref"],
+                        anchor="center",
+                    )
+                except tk.TclError:
+                    return
+            else:
+                try:
+                    self._scene_canvas.itemconfigure(pet["canvas_image_id"], image=pet["photo_ref"])
+                except tk.TclError:
+                    return
+            return
+
+        # Windows/other: existing Toplevel+Label rendering (color-key)
+        if pet.get("is_macos", False):
+            # Legacy macOS window-pet path (kept for safety; should not be used now)
+            if pil_img.mode != "RGBA":
+                pil_img = pil_img.convert("RGBA")
             pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
-            # Update label image
             label = pet.get("label")
             if label:
                 label.configure(image=pet["photo_ref"])
+            return
+
+        if pil_img.mode == "RGBA":
+            from PIL import Image as PILImage
+            rgb_img = PILImage.new("RGB", pil_img.size, PET_TRANSPARENT_KEY_RGB)
+            rgb_img.paste(pil_img, mask=pil_img.split()[3])
+            pil_img = rgb_img
+        pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
+        label = pet.get("label")
+        if label:
+            label.configure(image=pet["photo_ref"])
 
     def _pet_schedule_tick(self) -> None:
         if self._pet_after_id is not None:
@@ -769,7 +830,16 @@ class MainWindow:
 
         try:
             if not full_path.exists():
-                self.plant_label.configure(image="", text=f"Image not found:\n{image_path}")
+                if sys.platform == "darwin" and self._scene_canvas is not None:
+                    # Clear plant image on canvas
+                    if self._plant_canvas_img_id is not None:
+                        try:
+                            self._scene_canvas.delete(self._plant_canvas_img_id)
+                        except tk.TclError:
+                            pass
+                        self._plant_canvas_img_id = None
+                else:
+                    self.plant_label.configure(image="", text=f"Image not found:\n{image_path}")
                 return
             from PIL import Image
 
@@ -780,14 +850,35 @@ class MainWindow:
                 disp_w, disp_h = int(w * scale), int(h * scale)
                 img = img.resize((disp_w, disp_h), Image.Resampling.LANCZOS)
             self._plant_pil_image = img
-            self.plant_image = ctk.CTkImage(
-                light_image=img,
-                dark_image=img,
-                size=(img.width, img.height),
-            )
-            self.plant_label.configure(image=self.plant_image, text="")
+            if sys.platform == "darwin" and self._scene_canvas is not None:
+                # Draw plant on canvas so pets can be RGBA on top
+                self._plant_photo_ref = ImageTk.PhotoImage(img)
+                self._scene_canvas.update_idletasks()
+                cw = max(1, self._scene_canvas.winfo_width())
+                ch = max(1, self._scene_canvas.winfo_height())
+                x = cw // 2
+                y = ch // 2
+                if self._plant_canvas_img_id is None:
+                    self._plant_canvas_img_id = self._scene_canvas.create_image(
+                        x, y, image=self._plant_photo_ref, anchor="center"
+                    )
+                    # Ensure plant is behind pets
+                    self._scene_canvas.tag_lower(self._plant_canvas_img_id)
+                else:
+                    self._scene_canvas.itemconfigure(self._plant_canvas_img_id, image=self._plant_photo_ref)
+                    self._scene_canvas.coords(self._plant_canvas_img_id, x, y)
+                    self._scene_canvas.tag_lower(self._plant_canvas_img_id)
+            else:
+                self.plant_image = ctk.CTkImage(
+                    light_image=img,
+                    dark_image=img,
+                    size=(img.width, img.height),
+                )
+                self.plant_label.configure(image=self.plant_image, text="")
         except Exception as e:
             print(f"Error loading plant image: {e}")
+            if sys.platform == "darwin":
+                return
             self.plant_label.configure(image="", text="Error loading image")
     
     def _on_add_task_clicked(self):
