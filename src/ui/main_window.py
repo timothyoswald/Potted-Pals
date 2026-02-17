@@ -239,18 +239,28 @@ class MainWindow:
         win.overrideredirect(True)
         is_macos = sys.platform == "darwin"
         if is_macos:
-            # macOS: use transparent window - transparent areas will be truly transparent
+            # macOS: Try color-key transparency like Windows
+            # Use magenta as transparent color key
+            win.configure(bg=PET_TRANSPARENT_KEY_HEX)
             try:
-                win.wm_attributes("-transparent", True)
+                # Try color-key transparency on macOS
+                win.wm_attributes("-transparentcolor", PET_TRANSPARENT_KEY_HEX)
+                # If that works, use Label like Windows
+                label = tk.Label(win, image=None, bg=PET_TRANSPARENT_KEY_HEX, bd=0, highlightthickness=0)
+                label.pack()
+                canvas = None
+                canvas_image_id = None
             except tk.TclError:
-                pass
-            # Set background to empty/transparent
-            win.configure(bg="")
-            # Use Canvas on macOS for better RGBA transparency support
-            canvas = tk.Canvas(win, width=cell_w, height=cell_h, bg="", highlightthickness=0, bd=0)
-            canvas.pack()
-            label = None  # Not used on macOS
-            canvas_image_id = None  # Track canvas image item
+                # Fallback: use transparent window with Label
+                try:
+                    win.wm_attributes("-transparent", True)
+                except tk.TclError:
+                    pass
+                win.configure(bg="")
+                label = tk.Label(win, image=None, bg="", bd=0, highlightthickness=0)
+                label.pack()
+                canvas = None
+                canvas_image_id = None
         else:
             # Windows: use color-key transparency with composited images
             win.configure(bg=PET_TRANSPARENT_KEY_HEX)
@@ -270,8 +280,6 @@ class MainWindow:
             "sprites_left": sprites_left,
             "window": win,
             "label": label,
-            "canvas": canvas,
-            "canvas_image_id": canvas_image_id,
             "photo_ref": None,
             "x": None,
             "y": None,
@@ -290,12 +298,8 @@ class MainWindow:
         }
         win.bind("<Enter>", lambda e, p=pet: self._pet_tooltip_schedule_show(p))
         win.bind("<Leave>", lambda e, p=pet: self._pet_tooltip_hide(p))
-        if label:
-            label.bind("<Enter>", lambda e, p=pet: self._pet_tooltip_schedule_show(p))
-            label.bind("<Leave>", lambda e, p=pet: self._pet_tooltip_hide(p))
-        if canvas:
-            canvas.bind("<Enter>", lambda e, p=pet: self._pet_tooltip_schedule_show(p))
-            canvas.bind("<Leave>", lambda e, p=pet: self._pet_tooltip_hide(p))
+        label.bind("<Enter>", lambda e, p=pet: self._pet_tooltip_schedule_show(p))
+        label.bind("<Leave>", lambda e, p=pet: self._pet_tooltip_hide(p))
         def start_drag(e, p=pet):
             self._on_pet_drag_start(e, p)
             return "break"
@@ -303,12 +307,8 @@ class MainWindow:
             self._on_pet_drag_motion(e)
             return "break"
         win.bind("<ButtonPress-1>", start_drag)
-        if label:
-            label.bind("<ButtonPress-1>", start_drag)
-            label.bind("<B1-Motion>", drag_motion)
-        if canvas:
-            canvas.bind("<ButtonPress-1>", start_drag)
-            canvas.bind("<B1-Motion>", drag_motion)
+        label.bind("<ButtonPress-1>", start_drag)
+        label.bind("<B1-Motion>", drag_motion)
         self._pets.append(pet)
         self._pet_show_frame_one(pet)
         self._pet_schedule_state_change_one(pet)
@@ -547,30 +547,19 @@ class MainWindow:
         pil_img = frames[idx]
         # Handle transparency differently on macOS vs Windows
         if pet.get("is_macos", False):
-            # macOS: Use Canvas with RGBA images for true transparency
-            # Canvas supports RGBA transparency better than Label
+            # macOS: Use color-key transparency like Windows
+            # Composite RGBA onto transparent color key (magenta)
             if pil_img.mode == "RGBA":
-                # Use RGBA directly - Canvas can handle it
-                pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
-            else:
-                pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
-            # Update canvas image
-            canvas = pet.get("canvas")
-            if canvas:
-                # Remove old image if it exists
-                if pet.get("canvas_image_id") is not None:
-                    try:
-                        canvas.delete(pet["canvas_image_id"])
-                    except:
-                        pass
-                # Create new image at center of canvas
-                img_id = canvas.create_image(
-                    pet["cell_w"] // 2,
-                    pet["cell_h"] // 2,
-                    image=pet["photo_ref"],
-                    anchor="center"
-                )
-                pet["canvas_image_id"] = img_id
+                from PIL import Image as PILImage
+                # Composite onto transparent color key background (magenta)
+                rgb_img = PILImage.new("RGB", pil_img.size, PET_TRANSPARENT_KEY_RGB)
+                rgb_img.paste(pil_img, mask=pil_img.split()[3])
+                pil_img = rgb_img
+            pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
+            # Update label image
+            label = pet.get("label")
+            if label:
+                label.configure(image=pet["photo_ref"])
         else:
             # Windows: use color-key transparency with composited images
             if pil_img.mode == "RGBA":
