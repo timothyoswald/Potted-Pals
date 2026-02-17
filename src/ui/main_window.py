@@ -239,15 +239,16 @@ class MainWindow:
         win.overrideredirect(True)
         is_macos = sys.platform == "darwin"
         if is_macos:
-            # macOS: use color-key transparency like Windows for consistent behavior
-            # This works better than trying to use RGBA directly with PhotoImage
-            win.configure(bg=PET_TRANSPARENT_KEY_HEX)
+            # macOS: use transparent window - -transparentcolor doesn't work on macOS
+            # With transparent window, RGBA images will show transparency properly
             try:
-                win.wm_attributes("-transparentcolor", PET_TRANSPARENT_KEY_HEX)
+                win.wm_attributes("-transparent", True)
             except tk.TclError:
                 pass
-            label_bg = PET_TRANSPARENT_KEY_HEX
-            label = tk.Label(win, image=None, bg=label_bg, bd=0, highlightthickness=0)
+            # Use a valid background color (Tkinter requires it)
+            # With transparent window, this won't be visible
+            win.configure(bg=COLORS["cream"])
+            label = tk.Label(win, image=None, bg=COLORS["cream"], bd=0, highlightthickness=0)
             label.pack()
             canvas = None  # Not using Canvas on macOS
             canvas_image_id = None
@@ -535,19 +536,18 @@ class MainWindow:
             return
         idx = pet["frame_idx"] % len(frames)
         pil_img = frames[idx]
-        # Handle transparency - use color-key transparency on both platforms for consistency
-        if pil_img.mode == "RGBA":
-            from PIL import Image as PILImage
-            # Composite onto transparent color key background (magenta)
-            # This preserves transparency using color-key transparency
-            rgb_img = PILImage.new("RGB", pil_img.size, PET_TRANSPARENT_KEY_RGB)
-            rgb_img.paste(pil_img, mask=pil_img.split()[3])
-            pil_img = rgb_img
-        pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
-        # Update label image
-        label = pet.get("label")
-        if label:
-            label.configure(image=pet["photo_ref"])
+        # Handle transparency differently on macOS vs Windows
+        if pet.get("is_macos", False):
+            # macOS: Use RGBA images directly with transparent window
+            # PhotoImage supports RGBA on macOS when window is transparent
+            # Keep images as RGBA - don't composite onto any background
+            if pil_img.mode != "RGBA":
+                pil_img = pil_img.convert("RGBA")
+            pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
+            # Update label image
+            label = pet.get("label")
+            if label:
+                label.configure(image=pet["photo_ref"])
         else:
             # Windows: use color-key transparency with composited images
             if pil_img.mode == "RGBA":

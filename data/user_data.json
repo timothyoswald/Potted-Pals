@@ -1,32 +1,10 @@
 {
-  "currency_balance": 1999988200,
-  "active_plant_id": "plant_strawberry",
+  "currency_balance": 0,
+  "active_plant_id": "plant_shrub",
   "plant_stages": {
-    "plant_shrub": 5,
-    "plant_baby_cactus": 1,
-    "plant_clover": 4,
-    "plant_rose": 6,
-    "plant_cherry_blossom": 4,
-    "plant_strawberry": 8
+    "plant_shrub": 0
   },
-  "pet_custom_names": {
-    "plant_shrub": "Emma the Berry!",
-    "plant_cherry_blossom": "Ratma!",
-    "person": "Rat",
-    "cat": "The Him",
-    "mushroom": "D",
-    "slime": "PP"
-  },
-  "inventory": [
-    "plant_baby_cactus",
-    "plant_clover",
-    "plant_rose",
-    "plant_cherry_blossom",
-    "plant_strawberry",
-    "pet_person",
-    "pet_cat",
-    "pet_mushroom",
-    "pet_slime"
-  ],
-  "last_login": "2026-02-15"
+  "pet_custom_names": {},
+  "inventory": [],
+  "last_login": "2026-02-17"
 }
