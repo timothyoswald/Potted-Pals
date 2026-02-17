@@ -237,15 +237,39 @@ class MainWindow:
         cell_w, cell_h = first_frames[0].size
         win = tk.Toplevel(root_tk)
         win.overrideredirect(True)
-        # Use color-key transparency on both macOS and Windows for consistent behavior
-        # This allows transparent backgrounds in pet sprites to work properly
-        win.configure(bg=PET_TRANSPARENT_KEY_HEX)
-        try:
-            win.wm_attributes("-transparentcolor", PET_TRANSPARENT_KEY_HEX)
-        except tk.TclError:
-            pass
-        label_bg = PET_TRANSPARENT_KEY_HEX
+        is_macos = sys.platform == "darwin"
+        # Track whether we're using color-key transparency (for image compositing)
+        use_color_key = False
+        if is_macos:
+            # macOS: Try color-key transparency first, fallback to transparent window if not supported
+            win.configure(bg=PET_TRANSPARENT_KEY_HEX)
+            try:
+                # Try color-key transparency (may not work on all macOS versions)
+                win.wm_attributes("-transparentcolor", PET_TRANSPARENT_KEY_HEX)
+                label_bg = PET_TRANSPARENT_KEY_HEX
+                use_color_key = True
+            except tk.TclError:
+                # Fallback: use transparent window with cream background
+                try:
+                    win.wm_attributes("-transparent", True)
+                except tk.TclError:
+                    pass
+                # Set to cream to match plant area when window is transparent
+                win.configure(bg=COLORS["cream"])
+                label_bg = COLORS["cream"]
+                use_color_key = False
+        else:
+            # Windows: use color-key transparency with composited images
+            win.configure(bg=PET_TRANSPARENT_KEY_HEX)
+            try:
+                win.wm_attributes("-transparentcolor", PET_TRANSPARENT_KEY_HEX)
+            except tk.TclError:
+                pass
+            label_bg = PET_TRANSPARENT_KEY_HEX
+            use_color_key = True
         label = tk.Label(win, image=None, bg=label_bg, bd=0, highlightthickness=0)
+        # Store whether to use color-key for this pet (for image compositing)
+        pet_use_color_key = use_color_key
         label.pack()
         win.withdraw()
         pet = {
@@ -268,6 +292,7 @@ class MainWindow:
             "state_after_id": None,
             "tooltip_after_id": None,
             "tooltip": None,
+            "use_color_key": pet_use_color_key,
         }
         win.bind("<Enter>", lambda e, p=pet: self._pet_tooltip_schedule_show(p))
         win.bind("<Leave>", lambda e, p=pet: self._pet_tooltip_hide(p))
@@ -519,12 +544,17 @@ class MainWindow:
             return
         idx = pet["frame_idx"] % len(frames)
         pil_img = frames[idx]
-        # Convert RGBA to RGB with transparent color key if needed
-        # This preserves transparency using color-key transparency
+        # Convert RGBA to RGB, compositing onto appropriate background
         if pil_img.mode == "RGBA":
             from PIL import Image as PILImage
-            # Composite onto transparent color key background (magenta)
-            rgb_img = PILImage.new("RGB", pil_img.size, PET_TRANSPARENT_KEY_RGB)
+            # Use color-key transparency if supported, otherwise composite onto cream
+            if pet.get("use_color_key", False):
+                # Composite onto transparent color key background (magenta)
+                rgb_img = PILImage.new("RGB", pil_img.size, PET_TRANSPARENT_KEY_RGB)
+            else:
+                # Composite onto cream background to match plant area
+                cream_rgb = (244, 239, 230)  # #F4EFE6
+                rgb_img = PILImage.new("RGB", pil_img.size, cream_rgb)
             rgb_img.paste(pil_img, mask=pil_img.split()[3])
             pil_img = rgb_img
         pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
