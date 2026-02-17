@@ -23,6 +23,7 @@ from ..utils.pet_sprites import (
     list_pets,
     flip_frames,
     PET_TRANSPARENT_KEY_HEX,
+    PET_TRANSPARENT_KEY_RGB,
 )
 from .styles import COLORS, FONTS, WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT, WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT
 from .task_dialog import TaskDialog
@@ -49,7 +50,7 @@ class MainWindow:
         
         # Create main window
         self.root = ctk.CTk()
-        self.root.title("Sprout & Study")
+        self.root.title("Potted Pals")
         self.root.geometry(f"{WINDOW_DEFAULT_WIDTH}x{WINDOW_DEFAULT_HEIGHT}")
         self.root.minsize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
         
@@ -236,25 +237,14 @@ class MainWindow:
         cell_w, cell_h = first_frames[0].size
         win = tk.Toplevel(root_tk)
         win.overrideredirect(True)
-        is_macos = sys.platform == "darwin"
-        if is_macos:
-            # macOS: use transparent window with RGBA images composited onto cream
-            # Set window to be transparent (makes background see-through)
-            try:
-                win.wm_attributes("-transparent", True)
-            except tk.TclError:
-                pass
-            # Background color matches plant area (cream: #F4EFE6)
-            win.configure(bg="#F4EFE6")
-            label_bg = "#F4EFE6"
-        else:
-            # Windows: use color-key transparency with composited images
-            win.configure(bg=PET_TRANSPARENT_KEY_HEX)
-            try:
-                win.wm_attributes("-transparentcolor", PET_TRANSPARENT_KEY_HEX)
-            except tk.TclError:
-                pass
-            label_bg = PET_TRANSPARENT_KEY_HEX
+        # Use color-key transparency on both macOS and Windows for consistent behavior
+        # This allows transparent backgrounds in pet sprites to work properly
+        win.configure(bg=PET_TRANSPARENT_KEY_HEX)
+        try:
+            win.wm_attributes("-transparentcolor", PET_TRANSPARENT_KEY_HEX)
+        except tk.TclError:
+            pass
+        label_bg = PET_TRANSPARENT_KEY_HEX
         label = tk.Label(win, image=None, bg=label_bg, bd=0, highlightthickness=0)
         label.pack()
         win.withdraw()
@@ -529,13 +519,12 @@ class MainWindow:
             return
         idx = pet["frame_idx"] % len(frames)
         pil_img = frames[idx]
-        # On macOS with RGBA images, convert to RGB for PhotoImage compatibility
-        # Composite onto cream background to match plant area
-        if sys.platform == "darwin" and pil_img.mode == "RGBA":
+        # Convert RGBA to RGB with transparent color key if needed
+        # This preserves transparency using color-key transparency
+        if pil_img.mode == "RGBA":
             from PIL import Image as PILImage
-            # Convert cream hex to RGB: #F4EFE6 -> (244, 239, 230)
-            cream_rgb = (244, 239, 230)
-            rgb_img = PILImage.new("RGB", pil_img.size, cream_rgb)
+            # Composite onto transparent color key background (magenta)
+            rgb_img = PILImage.new("RGB", pil_img.size, PET_TRANSPARENT_KEY_RGB)
             rgb_img.paste(pil_img, mask=pil_img.split()[3])
             pil_img = rgb_img
         pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
