@@ -238,26 +238,19 @@ class MainWindow:
         win = tk.Toplevel(root_tk)
         win.overrideredirect(True)
         is_macos = sys.platform == "darwin"
-        # Track whether we're using color-key transparency (for image compositing)
-        use_color_key = False
         if is_macos:
-            # macOS: Try color-key transparency first, fallback to transparent window if not supported
-            win.configure(bg=PET_TRANSPARENT_KEY_HEX)
+            # macOS: use transparent window - transparent areas will be truly transparent
             try:
-                # Try color-key transparency (may not work on all macOS versions)
-                win.wm_attributes("-transparentcolor", PET_TRANSPARENT_KEY_HEX)
-                label_bg = PET_TRANSPARENT_KEY_HEX
-                use_color_key = True
+                win.wm_attributes("-transparent", True)
             except tk.TclError:
-                # Fallback: use transparent window with cream background
-                try:
-                    win.wm_attributes("-transparent", True)
-                except tk.TclError:
-                    pass
-                # Set to cream to match plant area when window is transparent
-                win.configure(bg=COLORS["cream"])
-                label_bg = COLORS["cream"]
-                use_color_key = False
+                pass
+            # Set background to empty/transparent
+            win.configure(bg="")
+            # Use Canvas on macOS for better RGBA transparency support
+            canvas = tk.Canvas(win, width=cell_w, height=cell_h, bg="", highlightthickness=0, bd=0)
+            canvas.pack()
+            label = None  # Not used on macOS
+            canvas_image_id = None  # Track canvas image item
         else:
             # Windows: use color-key transparency with composited images
             win.configure(bg=PET_TRANSPARENT_KEY_HEX)
@@ -266,11 +259,10 @@ class MainWindow:
             except tk.TclError:
                 pass
             label_bg = PET_TRANSPARENT_KEY_HEX
-            use_color_key = True
-        label = tk.Label(win, image=None, bg=label_bg, bd=0, highlightthickness=0)
-        # Store whether to use color-key for this pet (for image compositing)
-        pet_use_color_key = use_color_key
-        label.pack()
+            label = tk.Label(win, image=None, bg=label_bg, bd=0, highlightthickness=0)
+            label.pack()
+            canvas = None  # Not used on Windows
+            canvas_image_id = None  # Not used on Windows
         win.withdraw()
         pet = {
             "pet_id": pet_id,
@@ -278,6 +270,8 @@ class MainWindow:
             "sprites_left": sprites_left,
             "window": win,
             "label": label,
+            "canvas": canvas,
+            "canvas_image_id": canvas_image_id,
             "photo_ref": None,
             "x": None,
             "y": None,
@@ -292,12 +286,16 @@ class MainWindow:
             "state_after_id": None,
             "tooltip_after_id": None,
             "tooltip": None,
-            "use_color_key": pet_use_color_key,
+            "is_macos": is_macos,
         }
         win.bind("<Enter>", lambda e, p=pet: self._pet_tooltip_schedule_show(p))
         win.bind("<Leave>", lambda e, p=pet: self._pet_tooltip_hide(p))
-        label.bind("<Enter>", lambda e, p=pet: self._pet_tooltip_schedule_show(p))
-        label.bind("<Leave>", lambda e, p=pet: self._pet_tooltip_hide(p))
+        if label:
+            label.bind("<Enter>", lambda e, p=pet: self._pet_tooltip_schedule_show(p))
+            label.bind("<Leave>", lambda e, p=pet: self._pet_tooltip_hide(p))
+        if canvas:
+            canvas.bind("<Enter>", lambda e, p=pet: self._pet_tooltip_schedule_show(p))
+            canvas.bind("<Leave>", lambda e, p=pet: self._pet_tooltip_hide(p))
         def start_drag(e, p=pet):
             self._on_pet_drag_start(e, p)
             return "break"
@@ -305,9 +303,12 @@ class MainWindow:
             self._on_pet_drag_motion(e)
             return "break"
         win.bind("<ButtonPress-1>", start_drag)
-        label.bind("<ButtonPress-1>", start_drag)
-        win.bind("<B1-Motion>", drag_motion)
-        label.bind("<B1-Motion>", drag_motion)
+        if label:
+            label.bind("<ButtonPress-1>", start_drag)
+            label.bind("<B1-Motion>", drag_motion)
+        if canvas:
+            canvas.bind("<ButtonPress-1>", start_drag)
+            canvas.bind("<B1-Motion>", drag_motion)
         self._pets.append(pet)
         self._pet_show_frame_one(pet)
         self._pet_schedule_state_change_one(pet)
@@ -544,21 +545,45 @@ class MainWindow:
             return
         idx = pet["frame_idx"] % len(frames)
         pil_img = frames[idx]
-        # Convert RGBA to RGB, compositing onto appropriate background
-        if pil_img.mode == "RGBA":
-            from PIL import Image as PILImage
-            # Use color-key transparency if supported, otherwise composite onto cream
-            if pet.get("use_color_key", False):
+        # Handle transparency differently on macOS vs Windows
+        if pet.get("is_macos", False):
+            # macOS: Use Canvas with RGBA images for true transparency
+            # Canvas supports RGBA transparency better than Label
+            if pil_img.mode == "RGBA":
+                # Use RGBA directly - Canvas can handle it
+                pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
+            else:
+                pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
+            # Update canvas image
+            canvas = pet.get("canvas")
+            if canvas:
+                # Remove old image if it exists
+                if pet.get("canvas_image_id") is not None:
+                    try:
+                        canvas.delete(pet["canvas_image_id"])
+                    except:
+                        pass
+                # Create new image at center of canvas
+                img_id = canvas.create_image(
+                    pet["cell_w"] // 2,
+                    pet["cell_h"] // 2,
+                    image=pet["photo_ref"],
+                    anchor="center"
+                )
+                pet["canvas_image_id"] = img_id
+        else:
+            # Windows: use color-key transparency with composited images
+            if pil_img.mode == "RGBA":
+                from PIL import Image as PILImage
                 # Composite onto transparent color key background (magenta)
                 rgb_img = PILImage.new("RGB", pil_img.size, PET_TRANSPARENT_KEY_RGB)
-            else:
-                # Composite onto cream background to match plant area
-                cream_rgb = (244, 239, 230)  # #F4EFE6
-                rgb_img = PILImage.new("RGB", pil_img.size, cream_rgb)
-            rgb_img.paste(pil_img, mask=pil_img.split()[3])
-            pil_img = rgb_img
-        pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
-        pet["label"].configure(image=pet["photo_ref"])
+                rgb_img.paste(pil_img, mask=pil_img.split()[3])
+                pil_img = rgb_img
+            pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
+            # Update label image
+            label = pet.get("label")
+            if label:
+                label.configure(image=pet["photo_ref"])
 
     def _pet_schedule_tick(self) -> None:
         if self._pet_after_id is not None:
