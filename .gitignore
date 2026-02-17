@@ -34,7 +34,7 @@ env/
 *~
 
 # User data (optional: remove if you want to track default/sample data)
-# data/user_data.json
+data/user_data.json
 
 # OS
 .DS_Store

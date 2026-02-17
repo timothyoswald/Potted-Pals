@@ -245,12 +245,21 @@ class MainWindow:
                 win.wm_attributes("-transparent", True)
             except tk.TclError:
                 pass
-            # Use a valid background color (Tkinter requires it)
-            # With transparent window, this won't be visible
+            # Window background - with transparent window, this becomes transparent
+            # Use cream to match plant area background so transparent areas blend correctly
             win.configure(bg=COLORS["cream"])
-            label = tk.Label(win, image=None, bg=COLORS["cream"], bd=0, highlightthickness=0)
-            label.pack()
-            canvas = None  # Not using Canvas on macOS
+            # Use Canvas for better RGBA transparency support on macOS
+            # Canvas background matches plant area - transparent pixels in RGBA will show through
+            canvas = tk.Canvas(
+                win,
+                width=cell_w,
+                height=cell_h,
+                bg=COLORS["cream"],
+                highlightthickness=0,
+                bd=0
+            )
+            canvas.pack()
+            label = None  # Not using Label on macOS
             canvas_image_id = None
         else:
             # Windows: use color-key transparency with composited images
@@ -271,6 +280,8 @@ class MainWindow:
             "sprites_left": sprites_left,
             "window": win,
             "label": label,
+            "canvas": canvas,
+            "canvas_image_id": canvas_image_id,
             "photo_ref": None,
             "x": None,
             "y": None,
@@ -289,8 +300,12 @@ class MainWindow:
         }
         win.bind("<Enter>", lambda e, p=pet: self._pet_tooltip_schedule_show(p))
         win.bind("<Leave>", lambda e, p=pet: self._pet_tooltip_hide(p))
-        label.bind("<Enter>", lambda e, p=pet: self._pet_tooltip_schedule_show(p))
-        label.bind("<Leave>", lambda e, p=pet: self._pet_tooltip_hide(p))
+        if label:
+            label.bind("<Enter>", lambda e, p=pet: self._pet_tooltip_schedule_show(p))
+            label.bind("<Leave>", lambda e, p=pet: self._pet_tooltip_hide(p))
+        if canvas:
+            canvas.bind("<Enter>", lambda e, p=pet: self._pet_tooltip_schedule_show(p))
+            canvas.bind("<Leave>", lambda e, p=pet: self._pet_tooltip_hide(p))
         def start_drag(e, p=pet):
             self._on_pet_drag_start(e, p)
             return "break"
@@ -298,8 +313,12 @@ class MainWindow:
             self._on_pet_drag_motion(e)
             return "break"
         win.bind("<ButtonPress-1>", start_drag)
-        label.bind("<ButtonPress-1>", start_drag)
-        label.bind("<B1-Motion>", drag_motion)
+        if label:
+            label.bind("<ButtonPress-1>", start_drag)
+            label.bind("<B1-Motion>", drag_motion)
+        if canvas:
+            canvas.bind("<ButtonPress-1>", start_drag)
+            canvas.bind("<B1-Motion>", drag_motion)
         self._pets.append(pet)
         self._pet_show_frame_one(pet)
         self._pet_schedule_state_change_one(pet)
@@ -538,16 +557,41 @@ class MainWindow:
         pil_img = frames[idx]
         # Handle transparency differently on macOS vs Windows
         if pet.get("is_macos", False):
-            # macOS: Use RGBA images directly with transparent window
-            # PhotoImage supports RGBA on macOS when window is transparent
-            # Keep images as RGBA - don't composite onto any background
+            # macOS: Use RGBA images directly with Canvas and transparent window
+            # Ensure image is RGBA mode
             if pil_img.mode != "RGBA":
                 pil_img = pil_img.convert("RGBA")
+            # Try to preserve RGBA transparency by saving to BytesIO and reloading
+            # This sometimes helps with macOS transparency issues
+            try:
+                from io import BytesIO
+                buffer = BytesIO()
+                pil_img.save(buffer, format="PNG")
+                buffer.seek(0)
+                # Reload from buffer to ensure RGBA is preserved
+                from PIL import Image as PILImage
+                pil_img = PILImage.open(buffer).convert("RGBA")
+            except Exception:
+                pass  # If this fails, continue with original image
+            # Create PhotoImage from RGBA - should preserve transparency on macOS
             pet["photo_ref"] = ImageTk.PhotoImage(pil_img)
-            # Update label image
-            label = pet.get("label")
-            if label:
-                label.configure(image=pet["photo_ref"])
+            # Update canvas image
+            canvas = pet.get("canvas")
+            if canvas:
+                # Delete old image if it exists
+                if pet.get("canvas_image_id") is not None:
+                    try:
+                        canvas.delete(pet["canvas_image_id"])
+                    except:
+                        pass
+                # Create image at center of canvas
+                img_id = canvas.create_image(
+                    pet["cell_w"] // 2,
+                    pet["cell_h"] // 2,
+                    image=pet["photo_ref"],
+                    anchor="center"
+                )
+                pet["canvas_image_id"] = img_id
         else:
             # Windows: use color-key transparency with composited images
             if pil_img.mode == "RGBA":
