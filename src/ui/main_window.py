@@ -257,6 +257,7 @@ class MainWindow:
             # On macOS (especially Retina), Tk applies a global scaling factor which can
             # make images appear larger than on Windows. Compensate by resizing the
             # sprite frames by 1 / tk scaling so visual size matches Windows.
+            # Then apply a small extra shrink so pets feel better sized on macOS.
             try:
                 tk_scaling = float(self.root.tk.call("tk", "scaling"))
             except Exception:
@@ -264,10 +265,12 @@ class MainWindow:
             if tk_scaling and tk_scaling > 1.01:
                 try:
                     from PIL import Image as PILImage
+                    mac_extra_shrink = 1.15  # >1.0 makes pets smaller
                     def _downscale_frame(img: PILImage.Image) -> PILImage.Image:
                         w, h = img.size
-                        nw = max(1, int(round(w / tk_scaling)))
-                        nh = max(1, int(round(h / tk_scaling)))
+                        denom = tk_scaling * mac_extra_shrink
+                        nw = max(1, int(round(w / denom)))
+                        nh = max(1, int(round(h / denom)))
                         if (nw, nh) == (w, h):
                             return img
                         return img.resize((nw, nh), PILImage.Resampling.LANCZOS)
@@ -772,12 +775,16 @@ class MainWindow:
         if popup_win is not None:
             self._popup_windows.append(popup_win)
         for pet in self._pets:
+            # macOS pets are canvas items (no separate Toplevel window)
+            win = pet.get("window")
+            if win is None:
+                continue
             try:
                 if popup_win is not None:
-                    pet["window"].lower(popup_win)
+                    win.lower(popup_win)
                 else:
-                    pet["window"].lower()
-            except tk.TclError:
+                    win.lower()
+            except (tk.TclError, AttributeError, KeyError):
                 pass
 
     def _on_popup_closed(self, popup_win: Any = None) -> None:
