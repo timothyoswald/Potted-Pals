@@ -254,6 +254,33 @@ class MainWindow:
         if sys.platform == "darwin":
             if self._scene_canvas is None:
                 return
+            # On macOS (especially Retina), Tk applies a global scaling factor which can
+            # make images appear larger than on Windows. Compensate by resizing the
+            # sprite frames by 1 / tk scaling so visual size matches Windows.
+            try:
+                tk_scaling = float(self.root.tk.call("tk", "scaling"))
+            except Exception:
+                tk_scaling = 1.0
+            if tk_scaling and tk_scaling > 1.01:
+                try:
+                    from PIL import Image as PILImage
+                    def _downscale_frame(img: PILImage.Image) -> PILImage.Image:
+                        w, h = img.size
+                        nw = max(1, int(round(w / tk_scaling)))
+                        nh = max(1, int(round(h / tk_scaling)))
+                        if (nw, nh) == (w, h):
+                            return img
+                        return img.resize((nw, nh), PILImage.Resampling.LANCZOS)
+
+                    sprites = {k: [_downscale_frame(f) for f in frames] for k, frames in sprites.items()}
+                    sprites_left = {k: [_downscale_frame(f) for f in frames] for k, frames in sprites_left.items()}
+                    first_frames = next((v for v in sprites.values() if v), None)
+                    if not first_frames:
+                        return
+                    cell_w, cell_h = first_frames[0].size
+                except Exception:
+                    # If anything goes wrong, keep original sizes
+                    pass
             pet = {
                 "pet_id": pet_id,
                 "sprites": sprites,
